@@ -15,37 +15,61 @@ namespace Sitecore.Support.Pipelines.RenderField
     public virtual void Process(RenderFieldArgs args)
     {
       Assert.ArgumentNotNull(args, "args");
-     
       string firstPart = args.Result.FirstPart;
-      if (!string.IsNullOrWhiteSpace(firstPart) && firstPart.Contains(">"))
+      if (string.IsNullOrWhiteSpace(firstPart) || !firstPart.Contains(">"))
       {
-        var parts = firstPart.Split('"');
-        var unvedrsionedMediaTemplates = Context.Database.GetItem("{00373F71-5D08-4E9A-840F-9BB3C8193518}").Children;
-        var linkIdAttribute = args.FieldValue.Split(new char[] {' '}, StringSplitOptions.RemoveEmptyEntries)
-          .SingleOrDefault(x => x.StartsWith("id="))?.Replace("id=", "")?.Replace("\"", "");
-        ID mediaItemID;
-        if (!ID.TryParse(linkIdAttribute, out mediaItemID))
+        return;
+      }
+
+      var parts = firstPart.Split('"');
+      string[] fieldValues = this.FieldIsRichText(args)
+        ? args.FieldValue.Split('"')
+        : args.FieldValue.Split(' ');
+      var unvedrsionedMediaTemplates = Context.Database.GetItem("{00373F71-5D08-4E9A-840F-9BB3C8193518}").Children;
+
+      for (int i = 0; i < parts.Count(); i++)
+      {
+        if (!MediaManager.IsMediaUrl(parts[i]))
+        {
+          continue;
+        }
+
+        var linkIdAttribute = this.FieldIsRichText(args)
+          ? fieldValues[i].Replace("-/media/", "").Replace(".ashx", "")
+          : fieldValues.SingleOrDefault(x => x.StartsWith("id="))?.Replace("id=", "")?.Replace("\"", "");
+
+        Guid mediaItemId;
+        if (!Guid.TryParse(linkIdAttribute, out mediaItemId))
         {
           return;
         }
 
-        var mediaItem = Context.Database.GetItem(mediaItemID);
-        foreach (string part in parts)
+        var mediaItem = Context.Database.GetItem(ID.Parse(mediaItemId));
+        if (unvedrsionedMediaTemplates.Any(x => x.ID.Equals(mediaItem.TemplateID)))
         {
-          if (!MediaManager.IsMediaUrl(part) || unvedrsionedMediaTemplates.Any(x => x.ID == mediaItem.TemplateID))
+          // If media is unversioned and url has a 'la' parameter, remove one
+          if (parts[i].Contains("la="))
           {
-            continue;
+            var newPart = parts[i].Replace($"?la={Context.Language.Name}", "")
+              .Replace($"&la={Context.Language.Name}", "");
+            args.Result.FirstPart = args.Result.FirstPart.Replace(parts[i], newPart);
           }
-
-          // If the media url doesn't have an 'la' parameter, add one
-          if (!part.Contains("?la=") && !part.Contains("&la="))
+        }
+        else
+        {
+          // If media is versioned and url doesn't have a 'la' parameter, add one
+          if (!parts[i].Contains("la="))
           {
-            string lang = Context.Language.Name;
-            string newUrl = $"{part}{(part.Contains('?') ? "&" : "?")}la={lang}";
-            args.Result.FirstPart = args.Result.FirstPart.Replace(part, newUrl);
+            string newUrl = $"{parts[i]}{(parts[i].Contains('?') ? "&" : "?")}la={Context.Language.Name}";
+            args.Result.FirstPart = args.Result.FirstPart.Replace(parts[i], newUrl);
           }
         }
       }
+    }
+
+    private bool FieldIsRichText(RenderFieldArgs args)
+    {
+      return args.FieldTypeKey.Equals("rich text");
     }
   }
 }
